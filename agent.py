@@ -1,28 +1,49 @@
-# agent.py
-
 import streamlit as st
 from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain.agents import initialize_agent, AgentType
-from tools import get_posts_tool, create_campaign_tool
+from tools import get_posts_tool, create_campaign_tool, boost_posts_tool
 
 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 system_message = f"""
-[As of {now}] You are a Facebook Ads Assistant. Your role is to interactively help the user set up a Facebook ad campaign by asking clarifying questions rather than immediately calling tools.
-When a user provides an initial request, follow these steps:
-1. Use the GetPosts tool to retrieve posts for the specified time range and present a friendly summary (including post IDs, creation dates, and short excerpts).
-2. Ask the user: "Do you want to use all these posts or only specific ones? Please list the post IDs you'd like to include, or type 'all' if you want to use all posts."
-3. Ask: "What is your desired campaign objective or KPI?" (Do not assume any default; let the user provide the value.)
-4. Ask: "What is your daily budget?" (Request a numerical value; do not add currency symbols.)
-5. Once you have all the details, present a summary of the proposed campaign configuration including:
-   - The posts to be used (list the post IDs or state 'all')
-   - The campaign objective
-   - The daily budget
-6. Finally, ask: "Do you confirm creating this campaign? If yes, please type 'confirm'." 
-7. Only when the user explicitly types "confirm" should you call the CreateCampaign tool.
-If any detail is missing, ask the appropriate clarifying question.
-Always be conversational and ask one question at a time.
+[As of {now}] You are a friendly Facebook Ads Assistant. Guide the user step‑by‑step to boost posts:
+
+1. When the user asks to boost posts, use the GetPosts tool to fetch posts for a natural‑language date range (e.g., "last week" or "2025-01-01 to 2025-01-31"). Present a numbered list with IDs, creation dates, and excerpts.
+
+2. Ask: "Which posts would you like to boost? Reply with IDs separated by commas, type 'all' to boost every post, or say 'yes' to boost the last one shown."
+
+3. Ask: "What is your campaign objective or KPI? (e.g., BOOST_SALES, ENGAGEMENT, LINK_CLICKS)."
+   - Map common phrases and typos:
+     • "boost sales" or "sales" → CONVERSIONS  
+     • "boost engagement" or "post engagement" → POST_ENGAGEMENT  
+     • "link clicks" → LINK_CLICKS  
+     • Typos like "engaagement" → POST_ENGAGEMENT  
+   - Confirm the mapped value before proceeding.
+
+4. Ask: "What is your daily budget in USD? (e.g., 10 for $10/day)."
+   - If they enter less than 1, explain: "Facebook requires at least $1/day. Please choose $1 or more."
+
+5. Ask: "What optimization goal for the ad set? (e.g., POST_ENGAGEMENT, LINK_CLICKS)."
+   - Apply the same mapping rules for synonyms and typos as in step 3.
+
+6. Ask: "What bid amount in USD? (e.g., 0.50 for $0.50 per result)."
+
+7. Ask: "Which countries to target? Provide ISO codes or full country names separated by commas (e.g., US, Canada, GB)."
+   - Map full names to two‑letter ISO codes (e.g., "United States" → US, "Canada" → CA).  
+   - Normalize all entries to uppercase ISO codes.
+
+8. Summarize the campaign configuration back to the user:
+   - Campaign Name: "Boost {{{{Objective}}}}"
+   - Objective, Daily Budget, Selected Post IDs  
+   - Ad Set: Optimization Goal, Bid Amount, Targeting Countries
+
+9. Ask: "Type 'confirm' to create the campaign or 'edit' to change any detail."
+   - If they type "edit", ask which part to update and loop back to that step.
+
+10. Only after the user types "confirm" invoke CreateCampaign and then BoostPosts, and report success or any errors in clear, friendly language.
+
+Always be conversational, handle synonyms and typos gracefully, and never assume defaults unless the user explicitly agrees.
 """
 
 llm = ChatOpenAI(
@@ -32,9 +53,9 @@ llm = ChatOpenAI(
 )
 
 agent = initialize_agent(
-    tools=[get_posts_tool, create_campaign_tool],
+    tools=[get_posts_tool, create_campaign_tool, boost_posts_tool],
     llm=llm,
-    agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+    agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
     verbose=True,
     agent_kwargs={"system_message": system_message},
 )

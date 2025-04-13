@@ -10,7 +10,7 @@ st.markdown("""
     🤖 Facebook Ads AI Assistant
   </h1>
   <p style='text-align: center; color: grey; font-size:16px;'>
-    Interactively create Facebook ad campaigns—just by chatting.
+    Interactively create and boost Facebook ad campaigns—just by chatting.
   </p>
 """, unsafe_allow_html=True)
 
