@@ -18,14 +18,32 @@ def parse_date_range(natural_str: str) -> tuple[datetime, datetime]:
         return dateparser.parse(txt, settings={"PREFER_DATES_FROM": "past"}) or datetime(2000,1,1), now
 
 def tool_get_posts(input_str: str) -> str:
+    """
+    GetPosts Tool:
+    Retrieves posts from your Facebook Page for a given natural language time range.
+    Returns a friendly summary with each post's ID, created time, and a short excerpt.
+    Example inputs: "yesterday", "last week", "2023-01-01 to 2023-02-01", "all posts".
+    """
     try:
         since, until = parse_date_range(input_str)
         page_id = st.secrets["FB_PAGE_ID"]
         posts = get_posts_by_range(page_id, since, until)
         if not posts:
             return f"No posts found from {since.date()} to {until.date()}."
-        lines = [f"ID: {p['id']}, Created: {p['created_time']}, Excerpt: \"{p['excerpt']}\"" for p in posts]
-        return f"Found {len(posts)} posts from {since.date()} to {until.date()}:\n" + "\n".join(lines)
+
+        # Store for UI rendering
+        st.session_state.latest_posts = posts
+
+        # Numbered summary
+        lines = []
+        for i, p in enumerate(posts, start=1):
+            lines.append(
+                f"{i}. ID: {p['id']}\n   • Created: {p['created_time']}\n   • Excerpt: \"{p['excerpt']}\""
+            )
+        return (
+            f"Found {len(posts)} posts from {since.date()} to {until.date()}:\n\n"
+             "\n\n".join(lines)
+        )
     except Exception as e:
         return f"Error in GetPosts: {e}"
 

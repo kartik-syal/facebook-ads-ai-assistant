@@ -41,38 +41,54 @@ FacebookAdsApi.init(
     access_token=st.secrets["FB_ACCESS_TOKEN"],
 )
 
+# fb_api.py (updated get_posts_by_range)
+
 def get_posts_by_range(page_id: str, since: datetime.datetime, until: datetime.datetime) -> list[dict]:
     """
-    Fetch posts from the given Facebook Page between `since` and `until`.
-    Returns a list of dictionaries containing:
+    Fetch posts including media URLs and permalink for richer previews.
+    Returns a list of dicts with:
       - id
       - created_time
-      - excerpt (first 50 characters of the post message)
+      - message
+      - excerpt
+      - full_picture (URL to image if any)
+      - permalink_url (link to the post)
     """
     page = Page(page_id)
     posts = page.get_posts(
-        fields=["id", "created_time", "message"],
+        fields=[
+            "id",
+            "created_time",
+            "message",
+            "full_picture",
+            "permalink_url",
+        ],
         params={"since": since.isoformat(), "until": until.isoformat()}
     )
     results = []
     for p in posts:
         msg = p.get("message", "")
-        excerpt = (msg[:50] + ("..." if len(msg) > 50 else ""))
+        excerpt = (msg[:100] + ("…" if len(msg) > 100 else "")) or "<No text>"
         results.append({
             "id": p["id"],
-            "created_time": p.get("created_time", "N/A"),
+            "created_time": p.get("created_time", ""),
             "excerpt": excerpt,
+            "full_picture": p.get("full_picture"),       # may be None
+            "permalink_url": p.get("permalink_url"),     # always present
         })
+    # paginate
     while posts:
         try:
             posts = posts.load_next_page()
             for p in posts:
                 msg = p.get("message", "")
-                excerpt = (msg[:50] + ("..." if len(msg) > 50 else ""))
+                excerpt = (msg[:100] + ("…" if len(msg) > 100 else "")) or "<No text>"
                 results.append({
                     "id": p["id"],
-                    "created_time": p.get("created_time", "N/A"),
+                    "created_time": p.get("created_time", ""),
                     "excerpt": excerpt,
+                    "full_picture": p.get("full_picture"),
+                    "permalink_url": p.get("permalink_url"),
                 })
         except Exception:
             break
