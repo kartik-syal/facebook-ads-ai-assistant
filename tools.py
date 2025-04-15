@@ -1,120 +1,98 @@
-# tools.py
-
 import streamlit as st
-from langchain.agents import Tool
 from fb_api import get_posts_by_range, create_campaign, boost_posts
-import dateparser
 from datetime import datetime
+from pydantic import BaseModel, Field
+from langchain.tools import StructuredTool
+from typing import List, Literal
 
-def parse_date_range(natural_str: str) -> tuple[datetime, datetime]:
-    now = datetime.now()
-    txt = natural_str.strip().lower()
-    if txt in ("all posts", "all time", "all"):
-        return datetime(2000,1,1), now
-    if " to " in txt:
-        start_txt, end_txt = txt.split(" to ",1)
-        return dateparser.parse(start_txt, settings={"PREFER_DATES_FROM": "past"}), dateparser.parse(end_txt, settings={"PREFER_DATES_FROM": "future"})
-    else:
-        return dateparser.parse(txt, settings={"PREFER_DATES_FROM": "past"}) or datetime(2000,1,1), now
 
-def tool_get_posts(input_str: str) -> str:
+class PostDateInput(BaseModel):
+    since: str = Field(..., description="Start date in ISO format (YYYY-MM-DD)")
+    until: str = Field(..., description="End date in ISO format (YYYY-MM-DD)")
+
+class CampaignInput(BaseModel):
+    name: str = Field(..., description="Name of the campaign")
+    objective: Literal[
+        "OUTCOME_ENGAGEMENT", "OUTCOME_LEADS", "OUTCOME_SALES", 
+        "OUTCOME_TRAFFIC", "OUTCOME_AWARENESS", "OUTCOME_APP_PROMOTION"
+    ] = Field(..., description="Campaign objective")
+    budget: float = Field(..., description="Daily budget in dollars (e.g., 10.0)")
+
+class BoostPostsInput(BaseModel):
+    campaign_id: str = Field(..., description="ID of the campaign to use")
+    post_ids: List[str] = Field(..., description="List of post IDs to boost")
+    optimization_goal: Literal[
+        "POST_ENGAGEMENT", "LINK_CLICKS", "IMPRESSIONS", "REACH", 
+        "PAGE_LIKES", "OFFSITE_CONVERSIONS", "VIDEO_VIEWS"
+    ] = Field(..., description="Optimization goal")
+    bid_amount: float = Field(..., description="Bid amount in dollars")
+    geo_locations: List[str] = Field(..., description="List of country codes (e.g., ['US', 'CA'])")
+
+def tool_get_posts(since: str, until: str) -> str:
     """
-    GetPosts Tool:
-    Retrieves posts from your Facebook Page for a given natural language time range.
-    Returns a friendly summary with each post's ID, created time, and a short excerpt.
-    Example inputs: "yesterday", "last week", "2023-01-01 to 2023-02-01", "all posts".
+    Retrieves posts from your Facebook Page for a given ISO date range.
     """
     try:
-        since, until = parse_date_range(input_str)
+        since_dt = datetime.fromisoformat(since)
+        until_dt = datetime.fromisoformat(until)
         page_id = st.secrets["FB_PAGE_ID"]
-        posts = get_posts_by_range(page_id, since, until)
+        posts = get_posts_by_range(page_id, since_dt, until_dt)
         if not posts:
-            return f"No posts found from {since.date()} to {until.date()}."
+            return f"No posts found from {since_dt.date()} to {until_dt.date()}."
 
-        # Store for UI rendering
-        st.session_state.latest_posts = posts
-
-        # Numbered summary
-        lines = []
-        for i, p in enumerate(posts, start=1):
-            lines.append(
-                f"{i}. ID: {p['id']}\n   • Created: {p['created_time']}\n   • Excerpt: \"{p['excerpt']}\""
-            )
-        return (
-            f"Found {len(posts)} posts from {since.date()} to {until.date()}:\n\n"
-             "\n\n".join(lines)
-        )
+        return posts
     except Exception as e:
         return f"Error in GetPosts: {e}"
 
-def tool_create_campaign(input_str: str) -> str:
+def tool_create_campaign(name: str, objective: str, budget: float) -> str:
+    """
+    Creates a paused Facebook ad campaign with the specified parameters.
+    """
     try:
-        name, objective, budget_str = [p.strip() for p in input_str.split(";")]
-        budget = float(budget_str.replace("$", "").strip())
-        daily_budget = int(budget * 100)
-    except Exception:
-        return ("Error: please provide campaign details in the format 'Name;Objective;Budget', e.g. 'Boost Posts;ENGAGEMENT;$10'.")
-    try:
+        daily_budget = int(budget * 100)  # Convert dollars to cents
         result = create_campaign(name, objective, daily_budget, None)
-        return f"✅ Campaign '{name}' created with ID: {result['campaign_id']}."
+        return f"Campaign '{name}' created with ID: {result['campaign_id']}."
     except Exception as e:
         return f"Error in CreateCampaign: {e}"
 
-def tool_boost_posts(input_str: str) -> str:
+def tool_boost_posts(campaign_id: str, post_ids: List[str], optimization_goal: str, bid_amount: float, geo_locations: List[str]) -> str:
     """
-    BoostPosts Tool:
     Boost specific posts under an existing campaign.
-    Input format: 
-      'campaign_id;post_id1,post_id2,...;optimization_goal;bid_amount;geolocations'
-    Example: 
-      '1234567890;121745232751965_122200870082052318,121745232751965_121745459418609;POST_ENGAGEMENT;0.50;US,CA'
-    
-    Note: bid_amount is provided in dollars and converted to cents.
     """
     try:
-        parts = [p.strip() for p in input_str.split(";")]
-        if len(parts) != 5:
-            return ("Error: please provide details as 'campaign_id;post_id1,post_id2;optimization_goal;bid_amount;geolocations'. "
-                    "E.g. '1234567890;121_1,121_2;POST_ENGAGEMENT;0.50;US,CA'.")
-        campaign_id = parts[0]
-        post_ids = [pid.strip() for pid in parts[1].split(",") if pid.strip()]
-        optimization_goal = parts[2]
-        bid_amount = int(float(parts[3]) * 100)  # Convert dollars to cents
-        geo_locations = [g.strip().upper() for g in parts[4].split(",") if g.strip()]
-    except Exception as e:
-        return f"Error parsing input: {e}"
-    try:
-        res = boost_posts(campaign_id, post_ids, optimization_goal, bid_amount, geo_locations)
-        return (f"✅ Boosted {len(post_ids)} posts under ad set {res['ad_set_id']}. "
+        bid_cents = int(bid_amount * 100)  # Convert dollars to cents
+        geo_locations = [g.strip().upper() for g in geo_locations]
+        
+        res = boost_posts(campaign_id, post_ids, optimization_goal, bid_cents, geo_locations)
+        return (f"Boosted {len(post_ids)} posts under ad set {res['ad_set_id']}. "
                 f"Ad IDs: {res['ad_ids']}")
     except Exception as e:
         return f"Error boosting posts: {e}"
 
-get_posts_tool = Tool(
+get_posts_tool = StructuredTool.from_function(
     name="GetPosts",
+    description=(
+        "Retrieves posts from your Facebook Page over a specified date range. "
+        "Input must include 'since' and 'until' in ISO format (YYYY-MM-DD)."
+    ),
     func=tool_get_posts,
-    description=(
-        "Retrieves posts from your Facebook Page over a specified natural language time range. "
-        "For example: 'last week' or '2023-01-01 to 2023-02-01'. "
-        "Returns friendly details (post IDs, creation times, excerpts)."
-    ),
+    args_schema=PostDateInput,
 )
 
-create_campaign_tool = Tool(
+create_campaign_tool = StructuredTool.from_function(
     name="CreateCampaign",
-    func=tool_create_campaign,
     description=(
-        "Creates a paused Facebook ad campaign. Input must be in the format 'CampaignName;Objective;Budget'. "
-        "For example: 'Boost Posts;ENGAGEMENT;$10'."
+        "Creates a paused Facebook ad campaign with a name, objective, and daily budget."
     ),
+    func=tool_create_campaign,
+    args_schema=CampaignInput,
 )
 
-boost_posts_tool = Tool(
+boost_posts_tool = StructuredTool.from_function(
     name="BoostPosts",
-    func=tool_boost_posts,
     description=(
-        "Boost specific posts under an existing campaign. Input format: "
-        "'campaign_id;post_id1,post_id2;optimization_goal;bid_amount;geolocations'. "
-        "For example: '1234567890;121745232751965_122200870082052318,121745232751965_121745459418609;POST_ENGAGEMENT;0.50;US,CA'."
+        "Boost specific posts under an existing campaign with targeting parameters."
     ),
+    func=tool_boost_posts,
+    args_schema=BoostPostsInput,
 )
