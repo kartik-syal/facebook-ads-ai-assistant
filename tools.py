@@ -1,38 +1,23 @@
 import streamlit as st
 from fb_api import get_posts_by_range, create_campaign, boost_posts
 from datetime import datetime
-from pydantic import BaseModel, Field
-from langchain.tools import StructuredTool
-from typing import List, Literal
+import json
+from langchain.tools import Tool
 
-
-class PostDateInput(BaseModel):
-    since: str = Field(..., description="Start date in ISO format (YYYY-MM-DD)")
-    until: str = Field(..., description="End date in ISO format (YYYY-MM-DD)")
-
-class CampaignInput(BaseModel):
-    name: str = Field(..., description="Name of the campaign")
-    objective: Literal[
-        "OUTCOME_ENGAGEMENT", "OUTCOME_LEADS", "OUTCOME_SALES", 
-        "OUTCOME_TRAFFIC", "OUTCOME_AWARENESS", "OUTCOME_APP_PROMOTION"
-    ] = Field(..., description="Campaign objective")
-    budget: float = Field(..., description="Daily budget in dollars (e.g., 10.0)")
-
-class BoostPostsInput(BaseModel):
-    campaign_id: str = Field(..., description="ID of the campaign to use")
-    post_ids: List[str] = Field(..., description="List of post IDs to boost")
-    optimization_goal: Literal[
-        "POST_ENGAGEMENT", "LINK_CLICKS", "IMPRESSIONS", "REACH", 
-        "PAGE_LIKES", "OFFSITE_CONVERSIONS", "VIDEO_VIEWS"
-    ] = Field(..., description="Optimization goal")
-    bid_amount: float = Field(..., description="Bid amount in dollars")
-    geo_locations: List[str] = Field(..., description="List of country codes (e.g., ['US', 'CA'])")
-
-def tool_get_posts(since: str, until: str) -> str:
+def tool_get_posts(input_str: str) -> str:
     """
     Retrieves posts from your Facebook Page for a given ISO date range.
+    Input should be a JSON string with 'since' and 'until' dates in ISO format (YYYY-MM-DD).
+    Example: {"since": "2023-01-01", "until": "2023-01-31"}
     """
     try:
+        input_data = json.loads(input_str)
+        since = input_data.get("since")
+        until = input_data.get("until")
+        
+        if not since or not until:
+            return "Error: Both 'since' and 'until' dates are required."
+        
         since_dt = datetime.fromisoformat(since)
         until_dt = datetime.fromisoformat(until)
         page_id = st.secrets["FB_PAGE_ID"]
@@ -41,58 +26,85 @@ def tool_get_posts(since: str, until: str) -> str:
             return f"No posts found from {since_dt.date()} to {until_dt.date()}."
 
         return posts
+    except json.JSONDecodeError:
+        return "Error: Input must be a valid JSON string with 'since' and 'until' fields."
     except Exception as e:
         return f"Error in GetPosts: {e}"
 
-def tool_create_campaign(name: str, objective: str, budget: float) -> str:
+def tool_create_campaign(input_str: str) -> str:
     """
     Creates a paused Facebook ad campaign with the specified parameters.
+    Input should be a JSON string with 'name', 'objective', and 'budget' fields.
+    Example: {"name": "Summer Sale", "objective": "OUTCOME_TRAFFIC", "budget": 10.0}
     """
     try:
-        daily_budget = int(budget * 100)  # Convert dollars to cents
+        input_data = json.loads(input_str)
+        name = input_data.get("name")
+        objective = input_data.get("objective")
+        budget = input_data.get("budget")
+        
+        if not all([name, objective, budget]):
+            return "Error: 'name', 'objective', and 'budget' are all required."
+        
+        daily_budget = int(float(budget) * 100)  # Convert dollars to cents
         result = create_campaign(name, objective, daily_budget, None)
         return f"Campaign '{name}' created with ID: {result['campaign_id']}."
+    except json.JSONDecodeError:
+        return "Error: Input must be a valid JSON string with 'name', 'objective', and 'budget' fields."
     except Exception as e:
         return f"Error in CreateCampaign: {e}"
 
-def tool_boost_posts(campaign_id: str, post_ids: List[str], optimization_goal: str, bid_amount: float, geo_locations: List[str]) -> str:
+def tool_boost_posts(input_str: str) -> str:
     """
     Boost specific posts under an existing campaign.
+    Input should be a JSON string with 'campaign_id', 'post_ids', 'optimization_goal', 'bid_amount', and 'geo_locations' fields.
+    Example: {"campaign_id": "123456", "post_ids": ["post1", "post2"], "optimization_goal": "POST_ENGAGEMENT", "bid_amount": 5.0, "geo_locations": ["US", "CA"]}
     """
     try:
-        bid_cents = int(bid_amount * 100)  # Convert dollars to cents
+        input_data = json.loads(input_str)
+        campaign_id = input_data.get("campaign_id")
+        post_ids = input_data.get("post_ids")
+        optimization_goal = input_data.get("optimization_goal")
+        bid_amount = input_data.get("bid_amount")
+        geo_locations = input_data.get("geo_locations")
+        
+        if not all([campaign_id, post_ids, optimization_goal, bid_amount, geo_locations]):
+            return "Error: All fields (campaign_id, post_ids, optimization_goal, bid_amount, geo_locations) are required."
+        
+        bid_cents = int(float(bid_amount) * 100)  # Convert dollars to cents
         geo_locations = [g.strip().upper() for g in geo_locations]
         
         res = boost_posts(campaign_id, post_ids, optimization_goal, bid_cents, geo_locations)
         return (f"Boosted {len(post_ids)} posts under ad set {res['ad_set_id']}. "
                 f"Ad IDs: {res['ad_ids']}")
+    except json.JSONDecodeError:
+        return "Error: Input must be a valid JSON string with 'campaign_id', 'post_ids', 'optimization_goal', 'bid_amount', and 'geo_locations' fields."
     except Exception as e:
         return f"Error boosting posts: {e}"
 
-get_posts_tool = StructuredTool.from_function(
+get_posts_tool = Tool(
     name="GetPosts",
     description=(
         "Retrieves posts from your Facebook Page over a specified date range. "
-        "Input must include 'since' and 'until' in ISO format (YYYY-MM-DD)."
+        "Input must be a JSON string with 'since' and 'until' in ISO format (YYYY-MM-DD). "
     ),
     func=tool_get_posts,
-    args_schema=PostDateInput,
 )
 
-create_campaign_tool = StructuredTool.from_function(
+create_campaign_tool = Tool(
     name="CreateCampaign",
     description=(
-        "Creates a paused Facebook ad campaign with a name, objective, and daily budget."
+        "Creates a paused Facebook ad campaign. "
+        "Input must be a JSON string with 'name', 'objective', and 'budget' fields. "
     ),
     func=tool_create_campaign,
-    args_schema=CampaignInput,
 )
 
-boost_posts_tool = StructuredTool.from_function(
+boost_posts_tool = Tool(
     name="BoostPosts",
     description=(
-        "Boost specific posts under an existing campaign with targeting parameters."
+        "Boost specific posts under an existing campaign. "
+        "Input must be a JSON string with 'campaign_id', 'post_ids', 'optimization_goal', 'bid_amount', and 'geo_locations' fields. "
     ),
     func=tool_boost_posts,
-    args_schema=BoostPostsInput,
 )
